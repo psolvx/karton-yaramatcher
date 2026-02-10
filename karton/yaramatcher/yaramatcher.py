@@ -4,6 +4,7 @@ import os
 import re
 import tempfile
 import zipfile
+from itertools import chain
 from typing import List, Optional
 
 import yara  # type: ignore
@@ -114,9 +115,8 @@ class YaraMatcher(Karton):
             rule_names.append(normalize_rule_name(match.rule))
         return rule_names
 
-    def process_drakrun(self, task: Task) -> tuple[List[str], dict[str, List[str]]]:
+    def process_drakrun(self, task: Task) -> dict[str, List[str]]:
         self.log.info("Processing drakrun analysis")
-        yara_matches: List[str] = []
         matches_dict: dict[str, List[str]] = {}
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -135,17 +135,15 @@ class YaraMatcher(Karton):
                     with open(f"{rootdir}/{filename}", "rb") as dumpf:
                         content = dumpf.read()
                     file_matches = self.scan_sample(content)
-                    yara_matches += file_matches
                     for rule in file_matches:
                         if rule not in matches_dict:
                             matches_dict[rule] = []
                         matches_dict[rule].append(filename)
 
-        return yara_matches, matches_dict
+        return matches_dict
 
-    def process_joesandbox(self, task: Task) -> tuple[List[str], dict[str, List[str]]]:
+    def process_joesandbox(self, task: Task) -> dict[str, List[str]]:
         self.log.info("Processing joesandbox analysis")
-        yara_matches: List[str] = []
         matches_dict: dict[str, List[str]] = {}
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -160,13 +158,12 @@ class YaraMatcher(Karton):
                     with open(f"{rootdir}/{filename}", "rb") as dumpf:
                         content = dumpf.read()
                     file_matches = self.scan_sample(content)
-                    yara_matches += file_matches
                     for rule in file_matches:
                         if rule not in matches_dict:
                             matches_dict[rule] = []
                         matches_dict[rule].append(filename)
 
-        return yara_matches, matches_dict
+        return matches_dict
 
     def process(self, task: Task) -> None:
         headers = task.headers
@@ -183,24 +180,24 @@ class YaraMatcher(Karton):
                     matches_dict[rule] = [sample.metadata["sha256"]]
         elif headers["type"] == "analysis":
             if headers["kind"] == "drakrun":
-                yara_matches, matches_dict = self.process_drakrun(task)
+                matches_dict = self.process_drakrun(task)
             elif headers["kind"] == "joesandbox":
-                yara_matches, matches_dict = self.process_joesandbox(task)
+                matches_dict = self.process_joesandbox(task)
 
-        if not yara_matches:
+        if not matches_dict:
             self.log.info("Couldn't match any yara rules")
             return None
 
-        unique_matches = sorted(list(set(yara_matches)))
-
         self.log.info(
             "Got %d yara hits in total with %s distinct names",
-            len(yara_matches),
-            len(unique_matches),
+            len(list(chain(matches_dict.values()))),
+            len(matches_dict.keys()),
         )
 
+        self.log.info(f"Matches: {matches_dict}")
+
         # Add "yara:" prefix to tags
-        tags = [f"yara:{match}" for match in unique_matches]
+        tags = [f"yara:{match}" for match in matches_dict.keys()]
 
         tag_task = Task(
             {"type": "sample", "stage": "analyzed"},
